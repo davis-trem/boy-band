@@ -139,8 +139,11 @@ public class MidiController: MonoBehaviour {
                 continue;
             }
             int chunkIndex = tracks[i].chunkIndex;
-            if (AudioSettings.dspTime >= CalcDspTime(tracks[i].eventChunks[chunkIndex].time)) {
-                HandleMidiEvents(tracks[i].eventChunks[chunkIndex].events, tracks[i]);
+            if (
+                tracks[i].eventChunks.Count != chunkIndex + 1 &&
+                AudioSettings.dspTime >= CalcDspTime(tracks[i].eventChunks[chunkIndex].time)
+            ) {
+                HandleMidiEvents(tracks[i].eventChunks[chunkIndex].events, i);
                 tracks[i].chunkIndex++;
             }
 
@@ -152,7 +155,10 @@ public class MidiController: MonoBehaviour {
                 tracks[i].audioEventIndex = 1;
             } else {
                 int audioEventIndex = tracks[i].audioEventIndex;
-                if (AudioSettings.dspTime >= CalcDspTime(tracks[i].audioEvents[audioEventIndex].startTime)) {
+                if (
+                    tracks[i].audioEvents.Count != audioEventIndex + 1 &&
+                    AudioSettings.dspTime >= CalcDspTime(tracks[i].audioEvents[audioEventIndex].startTime)
+                ) {
                     int audioSourceIndex = tracks[i].audioSourceIndex;
                     AudioEvent audioEvent = tracks[i].audioEvents[audioEventIndex + 1];
                     ScheduleNote(tracks[i].audioSources[audioSourceIndex], audioEvent, tracks[i].maxVolume);
@@ -173,21 +179,21 @@ public class MidiController: MonoBehaviour {
         audioSource.pitch = Mathf.Pow(1.05946f, audioEvent.note - C5Note);
     }
 
-    void HandleMidiEvents(List<MidiEvent> events, Track track) {
+    void HandleMidiEvents(List<MidiEvent> events, int trackIndex) {
         foreach (MidiEvent midiEvent in events) {
             switch (midiEvent.MidiEventType) {
                 case MidiEventType.ProgramChange:
-                    track.clip = GetSample(midiEvent.Arg2, track.isPercussion);
-                    track.audioSources[0].clip = track.clip;
-                    track.audioSources[1].clip = track.clip;
+                    tracks[trackIndex].clip = GetSample(midiEvent.Arg2, tracks[trackIndex].isPercussion);
+                    tracks[trackIndex].audioSources[0].clip = tracks[trackIndex].clip;
+                    tracks[trackIndex].audioSources[1].clip = tracks[trackIndex].clip;
                     break;
                 case MidiEventType.ControlChange:
                     switch (midiEvent.ControlChangeType) {
                         case ControlChangeType.Volume:
-                            track.maxVolume = midiEvent.Arg3;
+                            tracks[trackIndex].maxVolume = midiEvent.Arg3;
                             break;
                         case ControlChangeType.Expression:
-                            track.expression = midiEvent.Arg3;
+                            tracks[trackIndex].expression = midiEvent.Arg3;
                             break;
                         case ControlChangeType.BankSelect:
                         case ControlChangeType.Balance:
@@ -199,8 +205,8 @@ public class MidiController: MonoBehaviour {
                     break;
                 case MidiEventType.NoteOn:
                     // 127 is the highest value
-                    track.audioSources[0].volume = ((((midiEvent.Velocity / 127f) * track.expression) / 127f) * track.maxVolume) / 127f;
-                    track.audioSources[1].volume = ((((midiEvent.Velocity / 127f) * track.expression) / 127f) * track.maxVolume) / 127f;
+                    tracks[trackIndex].audioSources[0].volume = ((((midiEvent.Velocity / 127f) * tracks[trackIndex].expression) / 127f) * tracks[trackIndex].maxVolume) / 127f;
+                    tracks[trackIndex].audioSources[1].volume = ((((midiEvent.Velocity / 127f) * tracks[trackIndex].expression) / 127f) * tracks[trackIndex].maxVolume) / 127f;
                     break;
                 case MidiEventType.NoteOff:
                 case MidiEventType.ChannelAfterTouch:
