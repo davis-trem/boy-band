@@ -31,6 +31,7 @@ public class MidiController: MonoBehaviour {
         public int audioEventIndex;
         public int maxVolume;
         public int expression;
+        public bool isPercussion;
     };
     Track[] tracks;
     
@@ -64,11 +65,14 @@ public class MidiController: MonoBehaviour {
         double ticksPerMinute = bpm * midiFile.TicksPerQuarterNote;
         ticksPerSecond = ticksPerMinute / 60d;
 
-        tracks = new Track[1]; //[midiFile.TracksCount - 1];
-        foreach (MidiTrack midiTrack in midiFile.Tracks.Skip(1).Take(1)) {
+        // tracks = new Track[1];
+        tracks = new Track[midiFile.TracksCount - 1];
+        // foreach (MidiTrack midiTrack in midiFile.Tracks.Skip(1).Take(1)) {
+        foreach (MidiTrack midiTrack in midiFile.Tracks.Skip(1)) {
             Track track = new Track();
             track.maxVolume = 127; // 127 is the highest value but may change during an event
             track.expression = 127;
+            track.isPercussion = midiTrack.Index == 10;
             track.audioSources = new AudioSource[] {
                 gameObject.AddComponent<AudioSource>(),
                 gameObject.AddComponent<AudioSource>()
@@ -130,9 +134,10 @@ public class MidiController: MonoBehaviour {
 
     // Update is called once per frame
     void Update() {
-        
-        AudioClip clip = Resources.Load($"Samples/000_C5") as AudioClip;
         for (int i = 0; i < tracks.Length; i++) {
+            if (tracks[i].isPercussion) {
+                continue;
+            }
             int chunkIndex = tracks[i].chunkIndex;
             if (AudioSettings.dspTime >= CalcDspTime(tracks[i].eventChunks[chunkIndex].time)) {
                 HandleMidiEvents(tracks[i].eventChunks[chunkIndex].events, tracks[i]);
@@ -141,16 +146,10 @@ public class MidiController: MonoBehaviour {
 
             // Audio Events Work
             if (tracks[i].audioEventIndex == 0) {
-
-                tracks[i].audioSources[0].clip = clip;
                 ScheduleNote(tracks[i].audioSources[0], tracks[i].audioEvents[0], tracks[i].maxVolume);
-                
-                tracks[i].audioSources[1].clip = clip;
                 ScheduleNote(tracks[i].audioSources[1], tracks[i].audioEvents[1], tracks[i].maxVolume);
 
                 tracks[i].audioEventIndex = 1;
-                print($"0 st: {startTime + (tracks[i].audioEvents[0].startTime / ticksPerSecond)}");
-                print($"1 st: {startTime + (tracks[i].audioEvents[1].startTime / ticksPerSecond)}");
             } else {
                 int audioEventIndex = tracks[i].audioEventIndex;
                 if (AudioSettings.dspTime >= CalcDspTime(tracks[i].audioEvents[audioEventIndex].startTime)) {
@@ -172,15 +171,13 @@ public class MidiController: MonoBehaviour {
         audioSource.PlayScheduled(CalcDspTime(audioEvent.startTime));
         audioSource.SetScheduledEndTime(CalcDspTime(audioEvent.endTime));
         audioSource.pitch = Mathf.Pow(1.05946f, audioEvent.note - C5Note);
-        audioSource.volume = (float)audioEvent.velocity / maxVolume;
     }
 
     void HandleMidiEvents(List<MidiEvent> events, Track track) {
         foreach (MidiEvent midiEvent in events) {
             switch (midiEvent.MidiEventType) {
                 case MidiEventType.ProgramChange:
-                    print("programming...");
-                    track.clip = GetSample(midiEvent.Arg2, false);
+                    track.clip = GetSample(midiEvent.Arg2, track.isPercussion);
                     track.audioSources[0].clip = track.clip;
                     track.audioSources[1].clip = track.clip;
                     break;
@@ -201,6 +198,10 @@ public class MidiController: MonoBehaviour {
                     }
                     break;
                 case MidiEventType.NoteOn:
+                    // 127 is the highest value
+                    track.audioSources[0].volume = ((((midiEvent.Velocity / 127f) * track.expression) / 127f) * track.maxVolume) / 127f;
+                    track.audioSources[1].volume = ((((midiEvent.Velocity / 127f) * track.expression) / 127f) * track.maxVolume) / 127f;
+                    break;
                 case MidiEventType.NoteOff:
                 case MidiEventType.ChannelAfterTouch:
                 case MidiEventType.KeyAfterTouch:
