@@ -15,12 +15,22 @@ public class MidiController: MonoBehaviour {
         public int time;
         public List<MidiEvent> events;
     };
+    struct AudioEvent {
+        public int note;
+        public int velocity;
+        public int startTime;
+        public int endTime;
+    }
     struct Track {
         public AudioSource[] audioSources;
         public int audioSourceIndex;
         public AudioClip clip;
-        public List<EventChunk> eventChunk;
-        public int chuckIndex;
+        public List<EventChunk> eventChunks;
+        public int chunkIndex;
+        public List<AudioEvent> audioEvents;
+        public int audioEventIndex;
+        public int maxVolume;
+        public int expression;
     };
     Track[] tracks;
     
@@ -57,22 +67,28 @@ public class MidiController: MonoBehaviour {
         tracks = new Track[1]; //[midiFile.TracksCount - 1];
         foreach (MidiTrack midiTrack in midiFile.Tracks.Skip(1).Take(1)) {
             Track track = new Track();
+            track.maxVolume = 127; // 127 is the highest value but may change during an event
+            track.expression = 127;
             track.audioSources = new AudioSource[] {
                 gameObject.AddComponent<AudioSource>(),
                 gameObject.AddComponent<AudioSource>()
             };
             track.audioSourceIndex = 0;
-            track.eventChunk = new List<EventChunk>();
-            track.chuckIndex = 0;
+            track.eventChunks = new List<EventChunk>();
+            track.chunkIndex = 0;
             EventChunk chunk = new EventChunk();
             chunk.events = new List<MidiEvent>();
+
+            track.audioEvents = new List<AudioEvent>();
+            track.audioEventIndex = 0;
+            Dictionary<int, AudioEvent> pendingAudioEvents = new Dictionary<int, AudioEvent>();
 
             for (int i = 0; i < midiTrack.MidiEvents.Count; i++) {
                 MidiEvent midiEvent = midiTrack.MidiEvents[i];
                 // Group simultaneously events together
                 if (i != 0 && midiEvent.Time != midiTrack.MidiEvents[i - 1].Time) {
                     // Add chuck of previous events
-                    track.eventChunk.Add(chunk);
+                    track.eventChunks.Add(chunk);
                     // Empty for new batch
                     chunk = new EventChunk();
                     chunk.events = new List<MidiEvent>();
@@ -81,52 +97,132 @@ public class MidiController: MonoBehaviour {
                 chunk.events.Add(midiEvent);
                 // if it's the last chuck and it hasn't already been added to chunk
                 if (i == midiTrack.MidiEvents.Count - 1 && midiEvent.Time == midiTrack.MidiEvents[i - 1].Time) {
-                    track.eventChunk.Add(chunk);
+                    track.eventChunks.Add(chunk);
+                }
+
+                // Audio Events Work
+                if (midiEvent.MidiEventType == MidiEventType.NoteOn) {
+                    AudioEvent audioEvent = new AudioEvent();
+                    audioEvent.note = midiEvent.Note;
+                    audioEvent.velocity = midiEvent.Velocity;
+                    audioEvent.startTime = midiEvent.Time;
+                    pendingAudioEvents.Add(midiEvent.Note, audioEvent);
+                }
+                if (midiEvent.MidiEventType == MidiEventType.NoteOff) {
+                    AudioEvent audioEvent = pendingAudioEvents[midiEvent.Note];
+                    audioEvent.endTime = midiEvent.Time;
+                    track.audioEvents.Add(audioEvent);
+                    pendingAudioEvents.Remove(midiEvent.Note);
                 }
             }
             tracks[midiTrack.Index - 1] = track;
         }
-        foreach (EventChunk ev in tracks[0].eventChunk) {
-            print($"time: {ev.time}, length: {ev.events.Count}");
-        }
+        // foreach (EventChunk ev in tracks[0].eventChunks) {
+        //     print($"time: {ev.time}, length: {ev.events.Count}");
+        // }
+        // foreach (AudioEvent av in tracks[0].audioEvents) {
+        //     print($"note: {av.note}, st: {av.startTime}, et: {av.endTime}");
+        // }
 
-        startTime = AudioSettings.dspTime + 0.2;
+        print($"dsp: {AudioSettings.dspTime}");
+        startTime = AudioSettings.dspTime + 2;
     }
 
     // Update is called once per frame
     void Update() {
-        if (AudioSettings.dspTime < startTime) {
-            return;
+        
+        AudioClip clip = Resources.Load($"Samples/000_C5") as AudioClip;
+        for (int i = 0; i < tracks.Length; i++) {
+            int chunkIndex = tracks[i].chunkIndex;
+            if (AudioSettings.dspTime >= CalcDspTime(tracks[i].eventChunks[chunkIndex].time)) {
+                HandleMidiEvents(tracks[i].eventChunks[chunkIndex].events, tracks[i]);
+                tracks[i].chunkIndex++;
+            }
+
+            // Audio Events Work
+            if (tracks[i].audioEventIndex == 0) {
+
+                tracks[i].audioSources[0].clip = clip;
+                ScheduleNote(tracks[i].audioSources[0], tracks[i].audioEvents[0], tracks[i].maxVolume);
+                
+                tracks[i].audioSources[1].clip = clip;
+                ScheduleNote(tracks[i].audioSources[1], tracks[i].audioEvents[1], tracks[i].maxVolume);
+
+                tracks[i].audioEventIndex = 1;
+                print($"0 st: {startTime + (tracks[i].audioEvents[0].startTime / ticksPerSecond)}");
+                print($"1 st: {startTime + (tracks[i].audioEvents[1].startTime / ticksPerSecond)}");
+            } else {
+                int audioEventIndex = tracks[i].audioEventIndex;
+                if (AudioSettings.dspTime >= CalcDspTime(tracks[i].audioEvents[audioEventIndex].startTime)) {
+                    int audioSourceIndex = tracks[i].audioSourceIndex;
+                    AudioEvent audioEvent = tracks[i].audioEvents[audioEventIndex + 1];
+                    ScheduleNote(tracks[i].audioSources[audioSourceIndex], audioEvent, tracks[i].maxVolume);
+                    tracks[i].audioEventIndex++;
+                    tracks[i].audioSourceIndex = 1 - audioSourceIndex;
+                }
+            }
+        }
+    }
+
+    double CalcDspTime(int time) {
+        return startTime + (time / ticksPerSecond);
+    }
+
+    void ScheduleNote(AudioSource audioSource, AudioEvent audioEvent, int maxVolume) {
+        audioSource.PlayScheduled(CalcDspTime(audioEvent.startTime));
+        audioSource.SetScheduledEndTime(CalcDspTime(audioEvent.endTime));
+        audioSource.pitch = Mathf.Pow(1.05946f, audioEvent.note - C5Note);
+        audioSource.volume = (float)audioEvent.velocity / maxVolume;
+    }
+
+    void HandleMidiEvents(List<MidiEvent> events, Track track) {
+        foreach (MidiEvent midiEvent in events) {
+            switch (midiEvent.MidiEventType) {
+                case MidiEventType.ProgramChange:
+                    print("programming...");
+                    track.clip = GetSample(midiEvent.Arg2, false);
+                    track.audioSources[0].clip = track.clip;
+                    track.audioSources[1].clip = track.clip;
+                    break;
+                case MidiEventType.ControlChange:
+                    switch (midiEvent.ControlChangeType) {
+                        case ControlChangeType.Volume:
+                            track.maxVolume = midiEvent.Arg3;
+                            break;
+                        case ControlChangeType.Expression:
+                            track.expression = midiEvent.Arg3;
+                            break;
+                        case ControlChangeType.BankSelect:
+                        case ControlChangeType.Balance:
+                        case ControlChangeType.Modulation:
+                        case ControlChangeType.Pan:
+                        case ControlChangeType.Sustain:
+                            break;
+                    }
+                    break;
+                case MidiEventType.NoteOn:
+                case MidiEventType.NoteOff:
+                case MidiEventType.ChannelAfterTouch:
+                case MidiEventType.KeyAfterTouch:
+                case MidiEventType.PitchBendChange:
+                    break;
+            }
         }
         
     }
 
-    void HandleMidiEvent(MidiEvent midiEvent, Track track) {
-        switch (midiEvent.MidiEventType) {
-            case MidiEventType.ProgramChange:
-                
-                break;
-            case MidiEventType.ControlChange:
-            case MidiEventType.NoteOn:
-            case MidiEventType.NoteOff:
-            case MidiEventType.ChannelAfterTouch:
-            case MidiEventType.KeyAfterTouch:
-            case MidiEventType.PitchBendChange:
-                break;
-        }
-    }
-
     AudioClip GetSample(int midiNote, bool isPercussion) {
         AudioClip clip;
+
         if (isPercussion) {
-            clip = Resources.Load($"Samples/Percussion/{midiNote}.wav") as AudioClip;
+            clip = Resources.Load($"Samples/Percussion/{midiNote}") as AudioClip;
         } else {
-            clip = Resources.Load($"Samples/{midiNote}_C5.wav") as AudioClip;
+            clip = Resources.Load($"Samples/{midiNote}_C5") as AudioClip;
             if (clip == null) {
                 int instrumentIndex = midiNote / 8;
                 string instrument = instruments[instrumentIndex];
                 for (int i = 8 * instrumentIndex; i < 8 * (instrumentIndex + 1); i++) {
-                    clip = Resources.Load("Samples/" + i.ToString("000") + "_C5.wav") as AudioClip;
+                    clip = Resources.Load("Samples/" + i.ToString("000") + "_C5") as AudioClip;
                     if (clip != null) {
                         break;
                     }

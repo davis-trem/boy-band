@@ -335,6 +335,8 @@ public enum ControlChangeType : byte
 
     Pan = 0x0A,
 
+    Expression  = 0x0B,
+
     Sustain = 0x40
 }
 
