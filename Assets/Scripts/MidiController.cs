@@ -20,8 +20,14 @@ public class MidiController: MonoBehaviour {
         public int velocity;
         public int startTime;
         public int endTime;
+        public int audioSourceListIndex;
+    }
+    struct TrackAudioSource {
+        public AudioSource[] audioSources;
+        public int audioSourceIndex;
     }
     struct Track {
+        public List<TrackAudioSource> audioSourceList;
         public AudioSource[] audioSources;
         public int audioSourceIndex;
         public AudioClip clip;
@@ -87,6 +93,9 @@ public class MidiController: MonoBehaviour {
             track.audioEventIndex = 0;
             Dictionary<int, AudioEvent> pendingAudioEvents = new Dictionary<int, AudioEvent>();
 
+            track.audioSourceList = new List<TrackAudioSource>();
+            Dictionary<int, int> simultaneouslyNotes = new Dictionary<int, int>(); // <Note, time>
+
             for (int i = 0; i < midiTrack.MidiEvents.Count; i++) {
                 MidiEvent midiEvent = midiTrack.MidiEvents[i];
                 // Group simultaneously events together
@@ -106,13 +115,27 @@ public class MidiController: MonoBehaviour {
 
                 // Audio Events Work
                 if (midiEvent.MidiEventType == MidiEventType.NoteOn) {
+                    simultaneouslyNotes.Add(midiEvent.Note, midiEvent.Time);
+                    if (simultaneouslyNotes.Count > track.audioSourceList.Count) {
+                        TrackAudioSource tas = new TrackAudioSource();
+                        tas.audioSources = new AudioSource[] {
+                            gameObject.AddComponent<AudioSource>(),
+                            gameObject.AddComponent<AudioSource>()
+                        };
+                        tas.audioSourceIndex = 0;
+                        track.audioSourceList.Add(tas);
+                    }
+
                     AudioEvent audioEvent = new AudioEvent();
                     audioEvent.note = midiEvent.Note;
                     audioEvent.velocity = midiEvent.Velocity;
                     audioEvent.startTime = midiEvent.Time;
+                    audioEvent.audioSourceListIndex = simultaneouslyNotes.Count - 1;
                     pendingAudioEvents.Add(midiEvent.Note, audioEvent);
                 }
                 if (midiEvent.MidiEventType == MidiEventType.NoteOff) {
+                    simultaneouslyNotes.Remove(midiEvent.Note);
+
                     AudioEvent audioEvent = pendingAudioEvents[midiEvent.Note];
                     audioEvent.endTime = midiEvent.Time;
                     track.audioEvents.Add(audioEvent);
@@ -149,8 +172,27 @@ public class MidiController: MonoBehaviour {
 
             // Audio Events Work
             if (tracks[i].audioEventIndex == 0) {
-                ScheduleNote(tracks[i].audioSources[0], tracks[i].audioEvents[0], tracks[i].maxVolume);
-                ScheduleNote(tracks[i].audioSources[1], tracks[i].audioEvents[1], tracks[i].maxVolume);
+                // ScheduleNote(tracks[i].audioSources[0], tracks[i].audioEvents[0], tracks[i].maxVolume);
+                // ScheduleNote(tracks[i].audioSources[1], tracks[i].audioEvents[1], tracks[i].maxVolume);
+                AudioEvent audioEvent = tracks[i].audioEvents[0];
+                TrackAudioSource tas = tracks[i].audioSourceList[audioEvent.audioSourceListIndex];
+                ScheduleNote(
+                    tas.audioSources[tas.audioSourceIndex],
+                    audioEvent,
+                    tracks[i].maxVolume
+                );
+                tas.audioSourceIndex = 1 - tas.audioSourceIndex;
+                tracks[i].audioSourceList[audioEvent.audioSourceListIndex] = tas;
+
+                audioEvent = tracks[i].audioEvents[1];
+                tas = tracks[i].audioSourceList[audioEvent.audioSourceListIndex];
+                ScheduleNote(
+                    tas.audioSources[tas.audioSourceIndex],
+                    audioEvent,
+                    tracks[i].maxVolume
+                );
+                tas.audioSourceIndex = 1 - tas.audioSourceIndex;
+                tracks[i].audioSourceList[audioEvent.audioSourceListIndex] = tas;
 
                 tracks[i].audioEventIndex = 1;
             } else {
@@ -161,9 +203,18 @@ public class MidiController: MonoBehaviour {
                 ) {
                     int audioSourceIndex = tracks[i].audioSourceIndex;
                     AudioEvent audioEvent = tracks[i].audioEvents[audioEventIndex + 1];
-                    ScheduleNote(tracks[i].audioSources[audioSourceIndex], audioEvent, tracks[i].maxVolume);
+                    // ScheduleNote(tracks[i].audioSources[audioSourceIndex], audioEvent, tracks[i].maxVolume);
+                    TrackAudioSource tas = tracks[i].audioSourceList[audioEvent.audioSourceListIndex];
+                    ScheduleNote(
+                        tas.audioSources[tas.audioSourceIndex],
+                        audioEvent,
+                        tracks[i].maxVolume
+                    );
+                    tas.audioSourceIndex = 1 - tas.audioSourceIndex;
+                    tracks[i].audioSourceList[audioEvent.audioSourceListIndex] = tas;
+
                     tracks[i].audioEventIndex++;
-                    tracks[i].audioSourceIndex = 1 - audioSourceIndex;
+                    // tracks[i].audioSourceIndex = 1 - audioSourceIndex;
                 }
             }
         }
@@ -184,8 +235,12 @@ public class MidiController: MonoBehaviour {
             switch (midiEvent.MidiEventType) {
                 case MidiEventType.ProgramChange:
                     tracks[trackIndex].clip = GetSample(midiEvent.Arg2, tracks[trackIndex].isPercussion);
-                    tracks[trackIndex].audioSources[0].clip = tracks[trackIndex].clip;
-                    tracks[trackIndex].audioSources[1].clip = tracks[trackIndex].clip;
+                    // tracks[trackIndex].audioSources[0].clip = tracks[trackIndex].clip;
+                    // tracks[trackIndex].audioSources[1].clip = tracks[trackIndex].clip;
+                    foreach (TrackAudioSource tas in tracks[trackIndex].audioSourceList) {
+                        tas.audioSources[0].clip = tracks[trackIndex].clip;
+                        tas.audioSources[1].clip = tracks[trackIndex].clip;
+                    }
                     break;
                 case MidiEventType.ControlChange:
                     switch (midiEvent.ControlChangeType) {
@@ -205,8 +260,12 @@ public class MidiController: MonoBehaviour {
                     break;
                 case MidiEventType.NoteOn:
                     // 127 is the highest value
-                    tracks[trackIndex].audioSources[0].volume = ((((midiEvent.Velocity / 127f) * tracks[trackIndex].expression) / 127f) * tracks[trackIndex].maxVolume) / 127f;
-                    tracks[trackIndex].audioSources[1].volume = ((((midiEvent.Velocity / 127f) * tracks[trackIndex].expression) / 127f) * tracks[trackIndex].maxVolume) / 127f;
+                    // tracks[trackIndex].audioSources[0].volume = ((((midiEvent.Velocity / 127f) * tracks[trackIndex].expression) / 127f) * tracks[trackIndex].maxVolume) / 127f;
+                    // tracks[trackIndex].audioSources[1].volume = ((((midiEvent.Velocity / 127f) * tracks[trackIndex].expression) / 127f) * tracks[trackIndex].maxVolume) / 127f;
+                    foreach (TrackAudioSource tas in tracks[trackIndex].audioSourceList) {
+                        tas.audioSources[0].volume = ((((midiEvent.Velocity / 127f) * tracks[trackIndex].expression) / 127f) * tracks[trackIndex].maxVolume) / 127f;
+                        tas.audioSources[1].volume = ((((midiEvent.Velocity / 127f) * tracks[trackIndex].expression) / 127f) * tracks[trackIndex].maxVolume) / 127f;
+                    }
                     break;
                 case MidiEventType.NoteOff:
                 case MidiEventType.ChannelAfterTouch:
